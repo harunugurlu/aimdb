@@ -49,7 +49,7 @@ std = ["aimdb-core/std", "dep:tokio", "dep:aimdb-tokio-adapter"]
 # Enable tracing for debugging
 tracing = ["dep:tracing", "aimdb-core/tracing"]
 
-# SyncProducer::set_value / try_set_value / set_value_at for Settable types
+# SyncProducer::set_value / set_value_at for Settable types
 data-contracts = ["dep:aimdb-data-contracts"]
 
 [package.metadata.docs.rs]

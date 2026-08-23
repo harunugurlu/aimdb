@@ -24,10 +24,6 @@ pub enum SyncError {
         message: String,
     },
 
-    /// Timeout while setting a value.
-    #[error("Timeout while setting value")]
-    SetTimeout,
-
     /// Timeout while getting a value.
     #[error("Timeout while getting value")]
     GetTimeout,

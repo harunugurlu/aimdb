@@ -1,7 +1,7 @@
 //! Synchronous producer for typed records.
 
 use crate::{SyncError, SyncResult};
-use aimdb_core::{AimDb, TryProduceError};
+use aimdb_core::AimDb;
 use alloc::sync::Weak;
 use core::fmt::Debug;
 use core::marker::PhantomData;
@@ -26,12 +26,6 @@ use core::marker::PhantomData;
 /// # fn example(producer: &SyncProducer<Temperature>) -> SyncResult<()> {
 /// // Set value (blocks until sent)
 /// producer.set(Temperature { celsius: 25.0 })?;
-///
-/// // Try to set (non-blocking)
-/// match producer.try_set(Temperature { celsius: 27.0 }) {
-///     Ok(()) => println!("Success"),
-///     Err(_) => println!("Buffer full, try later"),
-/// }
 /// # Ok(())
 /// # }
 /// ```
@@ -96,51 +90,6 @@ where
             Err(SyncError::RuntimeShutdown)
         }
     }
-
-    /// Try to set the value without blocking.
-    ///
-    /// Pushes the value directly into the record's buffer. Unlike `set()`, this never
-    /// blocks: it fails immediately if the buffer is full instead of waiting for space.
-    ///
-    /// # Errors
-    ///
-    /// Returns `SyncError::SetTimeout` for bounded, non-overwriting buffer
-    /// implementations if the buffer is full.
-    /// Returns `SyncError::RuntimeShutdown` if the runtime thread has been detached.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use aimdb_core::AimDbBuilder;
-    /// use aimdb_sync::{AimDbBuilderSyncExt, SyncResult};
-    /// use aimdb_tokio_adapter::TokioAdapter;
-    /// use std::sync::Arc;
-    ///
-    /// # #[derive(Debug, Clone)]
-    /// # struct MyData { value: i32 }
-    /// # fn main() -> SyncResult<()> {
-    /// let handle = AimDbBuilder::new()
-    ///     .runtime(Arc::new(TokioAdapter))
-    ///     .attach()?;
-    /// let producer = handle.producer::<MyData>("my_data")?;
-    /// match producer.try_set(MyData { value: 42 }) {
-    ///     Ok(()) => println!("Sent immediately"),
-    ///     Err(_) => println!("Buffer full or runtime shutdown"),
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn try_set(&self, value: T) -> SyncResult<()> {
-        if let Some(db) = self.db.upgrade() {
-            let producer = db.producer(&self.key)?;
-            producer.try_produce(value).map_err(|e| match e {
-                TryProduceError::Full(_) => SyncError::SetTimeout,
-                TryProduceError::Closed(_) => SyncError::RuntimeShutdown,
-            })
-        } else {
-            Err(SyncError::RuntimeShutdown)
-        }
-    }
 }
 
 /// Set-by-primitive verbs for `Settable` types (feature `data-contracts`).
@@ -193,11 +142,6 @@ where
     /// ```
     pub fn set_value(&self, value: T::Value) -> SyncResult<()> {
         self.set(T::set(value, unix_now_ms()))
-    }
-
-    /// Non-blocking variant, like [`try_set`](Self::try_set).
-    pub fn try_set_value(&self, value: T::Value) -> SyncResult<()> {
-        self.try_set(T::set(value, unix_now_ms()))
     }
 
     /// Explicit-timestamp variant (replay, testing).

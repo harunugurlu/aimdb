@@ -13,7 +13,6 @@
 //!
 //! ### Producer Operations
 //! - **`set()`**: Blocking send, waits if channel is full
-//! - **`try_set()`**: Non-blocking send, returns immediately
 //!
 //! ### Consumer Operations
 //! - **`get()`**: Blocking receive, waits for value
@@ -138,7 +137,6 @@
 //! variants:
 //!
 //! - `RuntimeShutdown`: The runtime thread stopped
-//! - `SetTimeout`: Producer timeout expired
 //! - `GetTimeout`: Consumer timeout expired or no data (try_get)
 //! - `AttachFailed`: Failed to start runtime thread
 //! - `DetachFailed`: Failed to stop runtime thread
@@ -150,8 +148,6 @@
 //! Producer errors are propagated synchronously back to the caller:
 //! - `set()` blocks until the produce operation completes and returns any errors
 //!   that occur
-//! - `try_set()` returns immediately: `Ok(())` if the record's buffer accepted the
-//!   value, `SyncError::SetTimeout` if it didn't (bounded, non-overwriting buffer, full)
 //!
 #![cfg_attr(feature = "std", doc = "```no_run")]
 #![cfg_attr(not(feature = "std"), doc = "```ignore")]

@@ -179,11 +179,9 @@ fn test_non_blocking_operations() {
     let result = consumer.try_get();
     assert!(matches!(result, Err(SyncError::GetTimeout)));
 
-    // Try set (should succeed immediately)
+    // Set (should succeed immediately)
     let test_value = test_value();
-    producer
-        .try_set(test_value.clone())
-        .expect("Failed to try_set");
+    producer.set(test_value.clone()).expect("Failed to set");
 
     // Use blocking get to ensure we receive the value
     // (try_get is inherently racy in this test scenario)
@@ -249,16 +247,13 @@ fn test_runtime_shutdown_error() {
 /// Test error handling - runtime shutdown, non-blocking operations
 #[test]
 fn test_runtime_shutdown_error_non_blocking() {
-    let (handle, producer, mut consumer) = setup(BufferCfg::SpmcRing { capacity: 10 });
+    let handle = attach(BufferCfg::SpmcRing { capacity: 10 });
+    let mut consumer = handle
+        .consumer::<TestData>("test.data")
+        .expect("Failed to create consumer");
 
     // Shut down the runtime
     handle.detach().expect("Failed to detach");
-
-    // Non-blocking operations should now fail with RuntimeShutdown too
-    let test_value = test_value();
-
-    let result = producer.try_set(test_value);
-    assert!(matches!(result, Err(SyncError::RuntimeShutdown)));
 
     let result = consumer.try_get();
     assert!(matches!(result, Err(SyncError::RuntimeShutdown)));
