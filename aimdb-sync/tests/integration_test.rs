@@ -392,16 +392,20 @@ fn test_error_propagation() {
 
     // Create a producer for an unregistered type/key
     // Note: producer creation succeeds, but set() should fail
-    let producer = handle
-        .producer::<TestData>("test.data")
-        .expect("Failed to create producer");
+    let producer_opt = handle
+        .producer::<TestData>("test.data");
+
+    let producer = match producer_opt {
+        Ok(val) => assert!(matches!(val, Err(SyncError::RuntimeShutdown))),
+        Err()
+    }
 
     // Try to produce a value - this should fail because the key is not registered
     let test_value = test_value();
 
     let result = producer.set(test_value.clone());
 
-    // Verify the error is propagated (not silently logged)
+    // Verify the error ssis propagated (not silently logged)
     assert!(
         result.is_err(),
         "Expected produce to fail for unregistered key"

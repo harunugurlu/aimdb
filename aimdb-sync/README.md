@@ -9,9 +9,9 @@ Synchronous API wrapper for AimDB - blocking operations for async database.
 **Key Features:**
 - **Pure Sync Context**: Works in plain `fn main()` - no `#[tokio::main]` required
 - **Blocking Operations**: Familiar sync API (set, get, try_get, etc.)
-- **Thread-Safe**: All types are `Send + Sync`, shareable across threads
+- **Thread-Safe**: `SyncProducer` type is `Send + Sync`, shareable across threads. `SyncConsumer` type is `Send` only, can be moved to another thread.
 - **Type-Safe**: Full compile-time type safety with generics
-- **Timeout Support**: All operations support configurable timeouts
+- **Timeout Support**: Blocking consumer read operations support configurable timeouts
 
 ## Architecture
 
@@ -22,13 +22,12 @@ Synchronous API wrapper for AimDB - blocking operations for async database.
 └──────────────┬───────────────┘
                │ SyncProducer<T>
                │ SyncConsumer<T>
+               | direct Writer / Reader access
                ▼
 ┌──────────────────────────────┐
-│   Channel Bridge             │
-│   (tokio::sync::mpsc +       │
-│    std::sync::mpsc)          │
+│   AimDB Record Buffer        │
 └──────────────┬───────────────┘
-               │
+               | shared with
                ▼
 ┌──────────────────────────────┐
 │   Async Context              │
@@ -43,9 +42,9 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-aimdb-sync = "0.5"
-aimdb-core = "1.0"
-aimdb-tokio-adapter = "0.5"
+aimdb-sync = "0.6"
+aimdb-core = "1.1"
+aimdb-tokio-adapter = "0.6"
 ```
 
 ### Basic Example
@@ -69,15 +68,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(TokioAdapter);
     let mut builder = AimDbBuilder::new().runtime(adapter);
     
-    builder.configure::<Temperature>(|reg| {
+    builder.configure::<Temperature>("temperature", |reg| {
         reg.buffer(BufferCfg::SingleLatest);
     });
     
     let handle = builder.attach()?;
     
     // Get sync handles
-    let producer = handle.producer::<Temperature>()?;
-    let consumer = handle.consumer::<Temperature>()?;
+    let producer = handle.producer::<Temperature>("temperature")?;
+    let mut consumer = handle.consumer::<Temperature>("temperature")?;
     
     // Send from one thread
     let prod_handle = std::thread::spawn(move || {
@@ -116,7 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Blocking Send
 
 ```rust
-let producer = handle.producer::<Temperature>()?;
+let producer = handle.producer::<Temperature>("temperature")?;
 
 let temp = Temperature { 
     celsius: 23.5, 
@@ -127,28 +126,6 @@ let temp = Temperature {
 producer.set(temp)?;
 ```
 
-### Send with Timeout
-
-```rust
-use std::time::Duration;
-
-// Block for max 1 second
-match producer.set_with_timeout(temp, Duration::from_secs(1)) {
-    Ok(_) => println!("Sent successfully"),
-    Err(e) => eprintln!("Timeout or error: {}", e),
-}
-```
-
-### Non-Blocking Send
-
-```rust
-// Returns immediately (doesn't wait for produce to complete)
-match producer.try_set(temp) {
-    Ok(_) => println!("Sent immediately"),
-    Err(e) => eprintln!("Channel full or error: {}", e),
-}
-```
-
 ## Consumer Operations
 
 `SyncConsumer<T>` provides blocking receive operations:
@@ -156,7 +133,7 @@ match producer.try_set(temp) {
 ### Blocking Receive
 
 ```rust
-let consumer = handle.consumer::<Temperature>()?;
+let mut consumer = handle.consumer::<Temperature>("temperature")?;
 
 // Blocks until value is available
 let temp = consumer.get()?;
@@ -200,18 +177,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(TokioAdapter);
     let mut builder = AimDbBuilder::new().runtime(adapter);
     
-    builder.configure::<Temperature>(|reg| {
+    builder.configure::<Temperature>("temperature", |reg| {
         reg.buffer(BufferCfg::SpmcRing { capacity: 16 });
     });
     
     let handle = builder.attach()?;
-    let producer = handle.producer::<Temperature>()?;
+    let producer = handle.producer::<Temperature>("temperature")?;
     
     // Spawn multiple consumer threads
     let mut handles = vec![];
     
     for id in 0..3 {
-        let consumer = handle.consumer::<Temperature>()?;
+        let mut consumer = handle.consumer::<Temperature>("temperature")?;
         let handle = std::thread::spawn(move || {
             loop {
                 match consumer.get_with_timeout(Duration::from_secs(1)) {
@@ -244,37 +221,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Thread Safety
 
-All sync types are `Send + Sync`:
+`SyncProducer` type is `Send + Sync`, shareable across threads. `SyncConsumer` type is `Send` only, can be moved to another thread:
 
 ```rust
 use std::sync::Arc;
 
-let producer = Arc::new(handle.producer::<Temperature>()?);
-let consumer = Arc::new(handle.consumer::<Temperature>()?);
+let producer = handle.producer::<Temperature>("temperature")?;
+let mut consumer = handle.consumer::<Temperature>("temperature")?;
 
-// Share across threads
+// `SyncProducer` implements `Clone`
 let prod_clone = producer.clone();
 std::thread::spawn(move || {
     prod_clone.set(Temperature { celsius: 25.0, sensor_id: "s1".to_string() }).ok();
 });
 
-let cons_clone = consumer.clone();
+// `SyncConsumer` implements `Send`, can be moved to another thread
 std::thread::spawn(move || {
-    let value = cons_clone.get().ok();
+    consumer.get().ok();
 });
 ```
 
 ## Error Handling
 
 ```rust
-use aimdb_core::DbError;
+use aimdb_sync::SyncError;
 
 match producer.set(temp) {
     Ok(_) => println!("Success"),
-    Err(DbError::SetTimeout) => {
-        eprintln!("Operation timed out");
-    }
-    Err(DbError::RuntimeShutdown) => {
+    Err(SyncError::RuntimeShutdown) => {
         eprintln!("Runtime thread has stopped");
     }
     Err(e) => {
@@ -284,10 +258,10 @@ match producer.set(temp) {
 ```
 
 Common error types:
-- `DbError::SetTimeout` / `DbError::GetTimeout`: Operation exceeded timeout
-- `DbError::RuntimeShutdown`: Runtime thread stopped or channel closed
-- `DbError::RecordNotFound`: Type not registered in database
-- `DbError::AttachFailed`: Failed to start runtime thread
+- `SyncError::GetTimeout`: Operation exceeded timeout
+- `SyncError::RuntimeShutdown`: Runtime thread stopped
+- `SyncError::Db(DbError::RecordKeyNotFound {...})`: Type not registered in database
+- `SyncError::AttachFailed`: Failed to start runtime thread
 
 ## Configuration Options
 
@@ -298,34 +272,20 @@ Choose buffer based on use case:
 ```rust
 use aimdb_core::buffer::BufferCfg;
 
-// SPMC Ring: Multiple consumers, bounded history
-builder.configure::<MyData>(|reg| {
+// SPMC Ring: Multiple consumers, bounded history, overwrites the oldest value when full
+builder.configure::<MyData>("my-data", |reg| {
     reg.buffer(BufferCfg::SpmcRing { capacity: 100 });
 });
 
-// SingleLatest: Always get newest value
-builder.configure::<MyData>(|reg| {
+// SingleLatest: Always get newest value, each write replaces the previous value
+builder.configure::<MyData>("my-data", |reg| {
     reg.buffer(BufferCfg::SingleLatest);
 });
 
 // Mailbox: Single slot, overwrite
-builder.configure::<MyData>(|reg| {
+builder.configure::<MyData>("my-data", |reg| {
     reg.buffer(BufferCfg::Mailbox);
 });
-```
-
-### Channel Capacity
-
-Control the sync bridge channel size:
-
-```rust
-// Default capacity (100)
-let producer = handle.producer::<Temperature>()?;
-let consumer = handle.consumer::<Temperature>()?;
-
-// Custom capacity for high-frequency data
-let producer = handle.producer_with_capacity::<Temperature>(1000)?;
-let consumer = handle.consumer_with_capacity::<Temperature>(1000)?;
 ```
 
 ## Shutdown
@@ -372,7 +332,7 @@ impl LegacyAdapter {
         let adapter = Arc::new(TokioAdapter);
         let mut builder = AimDbBuilder::new().runtime(adapter);
         
-        builder.configure::<SensorData>(|reg| {
+        builder.configure::<SensorData>("sensor-data", |reg| {
             reg.buffer(BufferCfg::SpmcRing { capacity: 100 });
         });
         
@@ -381,15 +341,15 @@ impl LegacyAdapter {
     }
     
     pub fn send_sensor_data(&self, data: SensorData) -> Result<(), String> {
-        let producer = self.handle.producer::<SensorData>()
+        let producer = self.handle.producer::<SensorData>("sensor-data")
             .map_err(|e| e.to_string())?;
         
-        producer.set_with_timeout(data, Duration::from_secs(1))
+        producer.set(data)
             .map_err(|e| e.to_string())
     }
     
     pub fn read_sensor_data(&self) -> Result<SensorData, String> {
-        let consumer = self.handle.consumer::<SensorData>()
+        let mut consumer = self.handle.consumer::<SensorData>("sensor-data")
             .map_err(|e| e.to_string())?;
         
         consumer.get_with_timeout(Duration::from_secs(1))
@@ -416,13 +376,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let adapter = Arc::new(TokioAdapter);
     let mut builder = AimDbBuilder::new().runtime(adapter);
     
-    builder.configure::<LogMessage>(|reg| {
+    builder.configure::<LogMessage>("log-message", |reg| {
         reg.buffer(BufferCfg::SpmcRing { capacity: 100 });
     });
     
     let handle = builder.attach()?;
-    let producer = handle.producer::<LogMessage>()?;
-    let consumer = handle.consumer::<LogMessage>()?;
+    let producer = handle.producer::<LogMessage>("log-message")?;
+    let mut consumer = handle.consumer::<LogMessage>("log-message")?;
     
     // Simple loop - no async/await
     loop {
@@ -441,15 +401,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Performance Considerations
 
 ### Overhead
-- Channel crossing adds ~1-10μs latency
-- Background runtime uses dedicated threads
-- Memory: One tokio::mpsc channel per producer, one std::mpsc channel per consumer
+- `attach()` starts a dedicated background thread that owns and drives the Tokio runtime.
 
 ### Optimization Tips
-1. **Batch Operations**: Group multiple sets/gets when possible
-2. **Avoid Blocking**: Use `try_*` methods in latency-sensitive paths
-3. **Channel Capacity**: Tune for expected throughput
-4. **Thread Count**: Match runtime_threads to workload
+- **Avoid Blocking**: Use `SyncConsumer::try_get()` when the caller thread must not wait.
 
 ## Testing
 
@@ -459,9 +414,6 @@ cargo test -p aimdb-sync
 
 # Run with logging
 RUST_LOG=debug cargo test -p aimdb-sync -- --nocapture
-
-# Benchmark
-cargo bench -p aimdb-sync
 ```
 
 ## Complete Examples

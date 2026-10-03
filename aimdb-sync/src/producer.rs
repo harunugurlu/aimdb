@@ -1,10 +1,9 @@
 //! Synchronous producer for typed records.
 
 use crate::{SyncError, SyncResult};
-use aimdb_core::AimDb;
+use aimdb_core::{AimDb, Producer as CoreProducer};
 use alloc::sync::Weak;
 use core::fmt::Debug;
-use core::marker::PhantomData;
 
 /// Synchronous producer for records of type `T`.
 ///
@@ -24,7 +23,7 @@ use core::marker::PhantomData;
 /// # #[derive(Clone, Debug, Serialize, Deserialize)]
 /// # struct Temperature { celsius: f32 }
 /// # fn example(producer: &SyncProducer<Temperature>) -> SyncResult<()> {
-/// // Set value (blocks until sent)
+/// // Set value
 /// producer.set(Temperature { celsius: 25.0 })?;
 /// # Ok(())
 /// # }
@@ -35,9 +34,7 @@ where
     T: Send + 'static + Debug + Clone,
 {
     db: Weak<AimDb>,
-    key: String,
-    // same reasons as for Producer in aimdb-core/src/typed_api.rs
-    _phantom: PhantomData<fn() -> T>,
+    producer: CoreProducer<T>,
 }
 
 impl<T> SyncProducer<T>
@@ -45,24 +42,18 @@ where
     T: Send + 'static + Debug + Clone,
 {
     /// Create a new sync producer (internal use only)
-    pub(crate) fn new(db: Weak<AimDb>, key: impl AsRef<str>) -> Self {
-        Self {
-            db,
-            key: key.as_ref().into(),
-            _phantom: PhantomData,
-        }
+    pub(crate) fn new(db: Weak<AimDb>, producer: CoreProducer<T>) -> Self {
+        Self { db, producer }
     }
 
-    /// Set the value, blocking until it can be sent.
+    /// Set the value directly to the buffer.
     ///
-    /// This call will block the current thread until the value can be sent to the runtime thread.
-    /// It's guaranteed to deliver the value eventually unless the runtime thread has shut down.
+    /// Fails if the lookup of the given key fails.
     ///
     /// # Errors
     ///
     /// Returns `SyncError::RuntimeShutdown` if the runtime thread has been detached.
-    /// Returns any error from the underlying `produce()` operation (e.g., record not registered,
-    /// buffer full, etc.).
+    /// Returns any error from the underlying `produce()` operation (e.g., record not registered, etc.).
     ///
     /// # Example
     ///
@@ -79,13 +70,14 @@ where
     ///     .runtime(Arc::new(TokioAdapter))
     ///     .attach()?;
     /// let producer = handle.producer::<MyData>("my_data")?;
-    /// producer.set(MyData { value: 42 })?; // blocks until value is sent and produced
+    /// producer.set(MyData { value: 42 })?;
     /// # Ok(())
     /// # }
     /// ```
     pub fn set(&self, value: T) -> SyncResult<()> {
-        if let Some(db) = self.db.upgrade() {
-            db.produce(&self.key, value).map_err(SyncError::Db)
+        if let Some(_db) = self.db.upgrade() {
+            self.producer.produce(value);
+            Ok(())
         } else {
             Err(SyncError::RuntimeShutdown)
         }

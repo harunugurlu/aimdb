@@ -233,6 +233,11 @@ impl AimDbHandle {
     ///
     /// - `T`: The record type, must implement `TypedRecord`
     ///
+    ///     /// # Errors
+    ///
+    /// - `DbError::RecordNotFound` if type `T` was not registered
+    /// - `SyncError::RuntimeShutdown` if the runtime thread has stopped
+    ///
     /// # Example
     ///
     /// ```no_run
@@ -250,7 +255,12 @@ impl AimDbHandle {
     where
         T: Send + 'static + Debug + Clone,
     {
-        Ok(crate::SyncProducer::new(Arc::downgrade(&self.db), key))
+        let core_producer = self.db.producer::<T>(key.as_ref()).map_err(SyncError::Db)?;
+
+        Ok(crate::SyncProducer::new(
+            Arc::downgrade(&self.db),
+            core_producer,
+        ))
     }
 
     /// Create a synchronous consumer for type `T`.

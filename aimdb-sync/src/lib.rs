@@ -12,7 +12,7 @@
 //! ## Features
 //!
 //! ### Producer Operations
-//! - **`set()`**: Blocking send, waits if channel is full
+//! - **`set()`**: Sends the value synchronously
 //!
 //! ### Consumer Operations
 //! - **`get()`**: Blocking receive, waits for value
@@ -146,7 +146,7 @@
 //! ### Error Propagation
 //!
 //! Producer errors are propagated synchronously back to the caller:
-//! - `set()` blocks until the produce operation completes and returns any errors
+//! - `set()` sends the value synchronously and returns any errors
 //!   that occur
 //!
 #![cfg_attr(feature = "std", doc = "```no_run")]
