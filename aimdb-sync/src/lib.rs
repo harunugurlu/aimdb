@@ -12,8 +12,8 @@
 //! ## Features
 //!
 //! ### Producer Operations
-//! - **`set()`**: Blocking send, waits if channel is full
-//! - **`try_set()`**: Non-blocking send, returns immediately
+//! - **`set()`**: Synchronously validates the runtime and record, then pushes
+//!   directly into the configured buffer
 //!
 //! ### Consumer Operations
 //! - **`get()`**: Blocking receive, waits for value
@@ -29,13 +29,15 @@
 //! ## Architecture
 //!
 //! ```text
-//! User Threads (sync)  →  Runtime Thread (async)
-//!                                 ↓
-//!                         AimDB (async)
-//!                                 ↓
-//!                         Buffers (SPMC, etc.)
-//!                                 ↓
-//!                         Consumer Threads (sync)
+//! SyncProducer::set() ──runtime checks──> AimDB record buffer
+//!                                             │
+//!                                      shared with
+//!                                             │
+//! SyncConsumer ─────────Reader<T>─────────────┘
+//!      │
+//!      └─ blocking reads use the Tokio handle on the calling thread
+//!
+//! A dedicated background thread owns and drives AimDB's async runtime tasks.
 //! ```
 //!
 //! The runtime thread is created automatically when you call `attach()` on the builder.
@@ -71,7 +73,7 @@
 //! let producer = handle.producer::<Temperature>("sensor.temp")?;
 //! let mut consumer = handle.consumer::<Temperature>("sensor.temp")?;
 //!
-//! // Producer: blocking operations
+//! // Producer: synchronous direct write
 //! producer.set(Temperature { celsius: 25.0 })?;
 //!
 //! // Consumer: blocking operations
@@ -130,10 +132,6 @@
 //! - **User threads**: Unlimited - any number of threads can call operations concurrently
 //! - **Runtime thread**: One dedicated thread named "aimdb-sync-runtime"
 //!
-//! ## Performance
-//!
-//! - **Latency**: Excellent for <50ms target, not suitable for hard low-latency requirements
-//!
 //! ## Error Handling
 //!
 //! All operations return [`SyncResult<T>`] with facade-specific [`SyncError`]
@@ -143,7 +141,6 @@
 //! - `ForkedChild`: Created before a `fork()`, and this is the child — the
 //!   runtime thread it needs did not survive, so a `set()` that would have
 //!   returned `Ok` into a buffer nobody drains is refused instead (std, Unix)
-//! - `SetTimeout`: Producer timeout expired
 //! - `GetTimeout`: Consumer timeout expired or no data (try_get)
 //! - `AttachFailed`: Failed to start runtime thread, carrying the `DbError`
 //!   that caused it — so `kind()` reports a bad record graph as
@@ -155,10 +152,8 @@
 //! ### Error Propagation
 //!
 //! Producer errors are propagated synchronously back to the caller:
-//! - `set()` blocks until the produce operation completes and returns any errors
-//!   that occur
-//! - `try_set()` returns immediately: `Ok(())` if the record's buffer accepted the
-//!   value, `SyncError::SetTimeout` if it didn't (bounded, non-overwriting buffer, full)
+//! - `set()` checks runtime and fork state, resolves the key and type, pushes
+//!   directly into the record buffer, and returns any error it encounters
 //!
 #![cfg_attr(feature = "std", doc = "```no_run")]
 #![cfg_attr(not(feature = "std"), doc = "```ignore")]

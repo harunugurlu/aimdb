@@ -15,10 +15,9 @@
 //!
 //! # Why `pthread_atfork` and not `getpid`
 //!
-//! Because this sits on the publish path. Measured: `try_set` is 121 ns and
-//! `std::process::id()` is 321 ns, so reading the pid per call would cost more
-//! than twice the work it guards. A relaxed atomic load does not measurably
-//! cost anything.
+//! Because this sits on the publish path. The `pthread_atfork` handler updates
+//! a generation counter, letting each publish check one relaxed atomic load
+//! instead of querying the operating system for the process identity.
 //!
 //! # The process-global caveat
 //!

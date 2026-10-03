@@ -31,6 +31,11 @@ pub trait AimDbBuilderSyncExt {
     /// - `DbError::RuntimeError` if the database fails to build
     /// - `SyncError::AttachFailed` if the runtime thread fails to start
     ///
+    /// # Panics
+    ///
+    /// Panics if called from a thread that is currently driving a Tokio
+    /// runtime, because startup waits with Tokio's blocking receive API.
+    ///
     /// # Example
     ///
     /// ```no_run
@@ -72,6 +77,11 @@ pub trait AimDbSyncExt {
     /// # Errors
     ///
     /// - `SyncError::AttachFailed` if the runtime thread fails to start
+    ///
+    /// # Panics
+    ///
+    /// Panics if called from a thread that is currently driving a Tokio
+    /// runtime, because startup waits with Tokio's blocking receive API.
     ///
     /// # Example
     ///
@@ -327,6 +337,12 @@ impl AimDbHandle {
     ///
     /// - `T`: The record type, must implement `TypedRecord`
     ///
+    /// Creating a producer is currently infallible: it stores the key and a
+    /// weak runtime reference without touching the database or runtime thread.
+    /// Key and type validation, shutdown detection, and the fork check happen
+    /// on the first call to [`SyncProducer::set`](crate::SyncProducer::set).
+    /// The `SyncResult` return type is retained for API compatibility.
+    ///
     /// # Example
     ///
     /// ```no_run
@@ -367,11 +383,14 @@ impl AimDbHandle {
     ///
     /// - `T`: The record type, must implement `TypedRecord`
     ///
-    /// # Errors (wrapped in SyncError::Db)
+    /// # Errors
     ///
-    /// - `DbError::RecordKeyNotFound` if type `T` was not registered
-    /// - `DbError::TypeMismatch` if the record type does not match `T`
-    /// - `DbError::MissingConfiguration` if the corresponding buffer was not configured
+    /// - `SyncError::ForkedChild` if called in a child process with an
+    ///   inherited handle whose runtime thread did not survive the fork.
+    /// - `SyncError::RuntimeShutdown` if the database has shut down.
+    /// - `SyncError::Db(DbError::RecordKeyNotFound)` if the key was not registered.
+    /// - `SyncError::Db(DbError::TypeMismatch)` if the key names another type.
+    /// - `SyncError::Db(DbError::MissingConfiguration)` if its buffer was not configured.
     ///
     /// # Example
     ///
